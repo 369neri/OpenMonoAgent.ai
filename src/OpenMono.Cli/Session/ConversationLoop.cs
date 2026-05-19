@@ -133,7 +133,7 @@ public sealed class ConversationLoop : IDisposable
             EnableThinking = thinking,
         };
 
-        var maxIterations = 1000;
+        var maxIterations = ResolveMaxIterations();
         for (var i = 0; i < maxIterations; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -761,6 +761,14 @@ public sealed class ConversationLoop : IDisposable
 
     private static string? ValidateToolInput(ITool tool, JsonElement input)
         => SchemaValidator.Validate(tool.Name, tool.InputSchema, input);
+
+    private static int ResolveMaxIterations()
+    {
+        var raw = Environment.GetEnvironmentVariable("OPENMONO_MAX_ITERATIONS");
+        return int.TryParse(raw, out var parsed)
+            ? Math.Clamp(parsed, 1, 1000)
+            : 25;
+    }
 
     private ToolContext BuildToolContext() => new()
     {

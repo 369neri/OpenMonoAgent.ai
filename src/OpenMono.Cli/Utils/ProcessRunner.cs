@@ -10,18 +10,7 @@ public static class ProcessRunner
         int timeoutMs = 30_000,
         CancellationToken ct = default)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "/bin/bash",
-            ArgumentList = { "-c", command },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        if (workingDirectory is not null)
-            psi.WorkingDirectory = workingDirectory;
+        var psi = ShellCommand.Create(command, workingDirectory);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeoutMs);

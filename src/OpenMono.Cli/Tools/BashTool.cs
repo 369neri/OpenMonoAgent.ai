@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using OpenMono.Permissions;
+using OpenMono.Utils;
 
 namespace OpenMono.Tools;
 
@@ -85,19 +86,7 @@ public sealed class BashTool : ToolBase
         if (timeoutMs <= 0) timeoutMs = 120_000;
         timeoutMs = Math.Min(timeoutMs, 600_000);
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = "/bin/bash",
-            ArgumentList = { "-c", command },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = context.WorkingDirectory,
-        };
-
-        psi.Environment["HOME"] = Environment.GetEnvironmentVariable("HOME") ?? "/root";
-        psi.Environment["PATH"] = Environment.GetEnvironmentVariable("PATH") ?? "/usr/local/bin:/usr/bin:/bin";
+        var psi = ShellCommand.Create(command, context.WorkingDirectory);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeoutMs);
@@ -177,7 +166,7 @@ public sealed class BashTool : ToolBase
 
     private static ToolResult RunBackground(string command, ToolContext context)
     {
-        var home = Environment.GetEnvironmentVariable("HOME") ?? "/root";
+        var home = ShellCommand.ResolveHome();
         var bgDir = Path.Combine(home, ".openmono", "bg");
         try { Directory.CreateDirectory(bgDir); }
         catch (Exception ex)
@@ -188,21 +177,8 @@ public sealed class BashTool : ToolBase
         var logName = $"bg-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}.log";
         var logPath = Path.Combine(bgDir, logName);
 
-        var wrapped = $"exec >>'{logPath}' 2>&1; {command}";
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = "/bin/bash",
-            ArgumentList = { "-c", wrapped },
-            RedirectStandardInput = false,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = context.WorkingDirectory,
-        };
-        psi.Environment["HOME"] = home;
-        psi.Environment["PATH"] = Environment.GetEnvironmentVariable("PATH") ?? "/usr/local/bin:/usr/bin:/bin";
+        var wrapped = ShellCommand.WrapBackgroundCommand(command, logPath);
+        var psi = ShellCommand.Create(wrapped, context.WorkingDirectory, redirectOutput: false);
 
         Process? process;
         try

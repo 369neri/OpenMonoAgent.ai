@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using OpenMono.Config;
+using OpenMono.Utils;
 
 namespace OpenMono.Hooks;
 
@@ -77,16 +78,7 @@ public sealed class HookRunner
 
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "/bin/bash",
-                ArgumentList = { "-c", command },
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = _config.WorkingDirectory,
-            };
+            var psi = ShellCommand.Create(command, _config.WorkingDirectory);
 
             var process = Process.Start(psi);
             if (process is null)

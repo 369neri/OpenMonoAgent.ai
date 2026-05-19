@@ -13,9 +13,11 @@ using OpenMono.Session;
 using OpenMono.Tools;
 using OpenMono.Utils;
 
-string? endpoint = null, model = null, workdir = null, configPath = null;
+string? endpoint = null, model = null, workdir = null, configPath = null, oneShotPrompt = null;
 var verbose = false;
 var showDetail = false;
+var noTools = false;
+var readOnlyTools = false;
 bool? useTui = null;
 
 for (var i = 0; i < args.Length; i++)
@@ -29,8 +31,11 @@ for (var i = 0; i < args.Length; i++)
         case "--model" when next is not null: model = next; i++; break;
         case "--workdir" when next is not null: workdir = next; i++; break;
         case "--config" when next is not null: configPath = next; i++; break;
+        case "--prompt" when next is not null: oneShotPrompt = next; i++; break;
         case "--verbose" or "-v": verbose = true; break;
         case "--detail": showDetail = true; break;
+        case "--no-tools": noTools = true; break;
+        case "--read-only-tools": readOnlyTools = true; break;
         case "--tui": useTui = true; break;
         case "--classic": useTui = false; break;
         case "--help" or "-h":
@@ -43,8 +48,11 @@ for (var i = 0; i < args.Length; i++)
             Console.WriteLine("  --model <name>     Model name (default: auto-detected from server via /props)");
             Console.WriteLine("  --workdir <path>   Working directory (default: current directory)");
             Console.WriteLine("  --config <path>    Path to settings.json override");
+            Console.WriteLine("  --prompt <text>    Run one non-interactive prompt and exit");
             Console.WriteLine("  --verbose, -v      Show LLM request/response debug info");
             Console.WriteLine("  --detail           Show the right-hand detail panel in the TUI");
+            Console.WriteLine("  --no-tools         Disable tool exposure for one-shot benchmark prompts");
+            Console.WriteLine("  --read-only-tools  Expose only read/search/code-intel tools for benchmark prompts");
             Console.WriteLine("  --tui              Force full-screen TUI mode (default for interactive)");
             Console.WriteLine("  --classic          Force classic scrolling terminal mode");
             Console.WriteLine("  --help, -h         Show this help message");
@@ -82,10 +90,10 @@ for (var i = 0; i < args.Length; i++)
     }
 }
 
-await RunAgentAsync(endpoint, model, workdir, configPath, verbose, showDetail, useTui);
+await RunAgentAsync(endpoint, model, workdir, configPath, verbose, showDetail, useTui, oneShotPrompt, noTools, readOnlyTools);
 return 0;
 
-static async Task RunAgentAsync(string? endpoint, string? model, string? workdir, string? configPath, bool verbose = false, bool showDetail = false, bool? useTui = null)
+static async Task RunAgentAsync(string? endpoint, string? model, string? workdir, string? configPath, bool verbose = false, bool showDetail = false, bool? useTui = null, string? oneShotPrompt = null, bool noTools = false, bool readOnlyTools = false)
 {
 
     IRenderer renderer = new TerminalRenderer();
@@ -104,7 +112,7 @@ static async Task RunAgentAsync(string? endpoint, string? model, string? workdir
     var sessionManager = new SessionManager(config);
     var session = SessionManager.CreateSession();
 
-    var enableTui = useTui ?? (!Console.IsInputRedirected && !Console.IsOutputRedirected);
+    var enableTui = useTui ?? (oneShotPrompt is null && !Console.IsInputRedirected && !Console.IsOutputRedirected);
     AnsiTuiRenderer? ansiTui = null;
     AppDomain.CurrentDomain.UnhandledException += (_, _) => ansiTui?.SafeExit();
     if (enableTui)
@@ -138,28 +146,35 @@ static async Task RunAgentAsync(string? endpoint, string? model, string? workdir
         tokenTracker.OnUsageUpdated = (_, _) => ansiTui.OnTokensUpdated();
     }
     var tools = new ToolRegistry();
-    tools.Register(new FileReadTool());
-    tools.Register(new FileWriteTool());
-    tools.Register(new FileEditTool());
-    tools.Register(new GlobTool());
-    tools.Register(new GrepTool());
-    tools.Register(new BashTool());
-    tools.Register(new AgentTool());
-    tools.Register(new TodoTool());
-    tools.Register(new AskUserTool());
-    tools.Register(new MemorySaveTool(memoryStore));
-    tools.Register(new WebFetchTool());
-    tools.Register(new WebSearchTool());
-    tools.Register(new ListDirectoryTool());
-    tools.Register(new ApplyPatchTool());
-    tools.Register(new EnterPlanModeTool());
-    tools.Register(new ExitPlanModeTool());
-    tools.Register(new LspTool(lspManager));
+    if (!noTools)
+    {
+        tools.Register(new FileReadTool());
+        tools.Register(new GlobTool());
+        tools.Register(new GrepTool());
+        tools.Register(new ListDirectoryTool());
+        tools.Register(new LspTool(lspManager));
+        if (!readOnlyTools)
+        {
+            tools.Register(new FileWriteTool());
+            tools.Register(new FileEditTool());
+            tools.Register(new BashTool());
+            tools.Register(new AgentTool());
+            tools.Register(new TodoTool());
+            tools.Register(new AskUserTool());
+            tools.Register(new MemorySaveTool(memoryStore));
+            tools.Register(new WebFetchTool());
+            tools.Register(new WebSearchTool());
+            tools.Register(new ApplyPatchTool());
+            tools.Register(new EnterPlanModeTool());
+            tools.Register(new ExitPlanModeTool());
+        }
+    }
 
     var refDir = ResolveRefDirectory(config);
-    tools.Register(new RoslynTool(referenceDirectory: refDir));
+    if (!noTools)
+        tools.Register(new RoslynTool(referenceDirectory: refDir));
 
-    if (config.AutoDetectCodeGraph)
+    if (config.AutoDetectCodeGraph && !noTools && !readOnlyTools)
     {
         await AutoDetectCodeGraphAsync(config, renderer);
     }
@@ -174,7 +189,8 @@ static async Task RunAgentAsync(string? endpoint, string? model, string? workdir
     var playbookRegistry = new PlaybookRegistry();
     playbookRegistry.RegisterAll(playbookLoader.LoadAll());
     var playbookExecutor = new PlaybookExecutor(llm, tools, renderer, config, permissions);
-    tools.Register(new PlaybookTool(playbookRegistry, playbookExecutor));
+    if (!noTools && !readOnlyTools)
+        tools.Register(new PlaybookTool(playbookRegistry, playbookExecutor));
 
     var systemPrompt = await BuildSystemPrompt(config, memoryStore, playbookRegistry);
     session.AddMessage(new Message { Role = MessageRole.System, Content = systemPrompt });
@@ -188,7 +204,8 @@ static async Task RunAgentAsync(string? endpoint, string? model, string? workdir
         Env = kv.Value.Env,
         Enabled = kv.Value.Enabled,
     });
-    await mcpManager.InitializeAsync(mcpConfigs, tools, CancellationToken.None);
+    if (!readOnlyTools)
+        await mcpManager.InitializeAsync(mcpConfigs, tools, CancellationToken.None);
 
     var checkpointer = new Checkpointer(llm, config.Llm.ContextSize);
 
@@ -221,6 +238,19 @@ static async Task RunAgentAsync(string? endpoint, string? model, string? workdir
     ansiTui?.EnterFullScreen();
 
     renderer.WriteWelcome(config.Llm.Model, config.Llm.Endpoint);
+
+    if (!string.IsNullOrWhiteSpace(oneShotPrompt))
+    {
+        using var oneShotCts = new CancellationTokenSource();
+        var resolvedPrompt = ResolveAtReferences(
+            InputSanitizer.SanitizeUserInput(oneShotPrompt),
+            config.WorkingDirectory);
+
+        await loop.RunTurnAsync(resolvedPrompt, oneShotCts.Token);
+        await sessionManager.SaveAsync(session, CancellationToken.None);
+        renderer.WriteInfo($"Session saved: {session.Id}");
+        return;
+    }
 
     var lastCtrlCExitTime = DateTime.MinValue;
 
